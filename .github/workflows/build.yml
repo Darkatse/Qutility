@@ -16,7 +16,7 @@ jobs:
   build-linux-x64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -24,7 +24,7 @@ jobs:
           sudo apt-get install -y libfontconfig1-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
@@ -36,7 +36,7 @@ jobs:
           chmod +x dist/${{ env.BINARY_NAME }}-linux-x64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-linux-x64
           path: dist/${{ env.BINARY_NAME }}-linux-x64
@@ -47,7 +47,7 @@ jobs:
   build-linux-arm64:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -55,7 +55,7 @@ jobs:
           sudo apt-get install -y libfontconfig1-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
@@ -67,7 +67,7 @@ jobs:
           chmod +x dist/${{ env.BINARY_NAME }}-linux-arm64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-linux-arm64
           path: dist/${{ env.BINARY_NAME }}-linux-arm64
@@ -114,10 +114,10 @@ jobs:
   build-windows-x64:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
@@ -128,7 +128,7 @@ jobs:
           copy target\release\${{ env.BINARY_NAME }}.exe dist\${{ env.BINARY_NAME }}-windows-x64.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-windows-x64
           path: dist/${{ env.BINARY_NAME }}-windows-x64.exe
@@ -139,10 +139,10 @@ jobs:
   build-macos-x64:
     runs-on: macos-13  # Intel-based macOS runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
@@ -154,7 +154,7 @@ jobs:
           chmod +x dist/${{ env.BINARY_NAME }}-macos-x64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-macos-x64
           path: dist/${{ env.BINARY_NAME }}-macos-x64
@@ -165,10 +165,10 @@ jobs:
   build-macos-arm64:
     runs-on: macos-latest  # ARM-based macOS runner (M1/M2)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
@@ -180,7 +180,7 @@ jobs:
           chmod +x dist/${{ env.BINARY_NAME }}-macos-arm64
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-macos-arm64
           path: dist/${{ env.BINARY_NAME }}-macos-arm64
@@ -200,7 +200,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
