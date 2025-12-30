@@ -1,0 +1,48 @@
+[package]
+name = "qutility"
+version = "0.1.0"
+edition = "2021"
+authors = ["Changjiang Wu"]
+description = "A unified computational condensed matter physics toolkit"
+license = "Apache-2.0"
+repository = "https://github.com/Darkatse/Qutility"
+keywords = ["physics", "dft", "vasp", "castep", "airss"]
+categories = ["command-line-utilities", "science"]
+
+[dependencies]
+# CLI framework
+clap = { version = "4", features = ["derive", "color", "env"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Terminal output beautification
+colored = "2"
+indicatif = "0.17"
+console = "0.15"
+tabled = "0.15"
+
+# Parallel processing
+rayon = "1"
+num_cpus = "1"
+
+# File utilities
+walkdir = "2"
+glob = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+csv = "1"
+
+# Text parsing
+regex = "1"
+
+# Plotting
+plotters = "0.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
