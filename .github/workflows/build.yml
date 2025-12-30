@@ -137,7 +137,7 @@ jobs:
   # macOS x86_64 (native Intel)
   # ─────────────────────────────────────────────────────────────
   build-macos-x64:
-    runs-on: macos-13  # Intel-based macOS runner
+    runs-on: macos-15  # Intel-based macOS runner
     steps:
       - uses: actions/checkout@v6
 
