@@ -130,8 +130,9 @@ pub fn execute(args: SubmitArgs) -> Result<()> {
 
         // 提交作业
         if args.submit && !args.dry_run {
+            let sbatch_arg = submit_script_arg(&sbatch_path);
             match Command::new("sbatch")
-                .arg(&sbatch_path)
+                .arg(&sbatch_arg)
                 .current_dir(&job_dir)
                 .output()
             {
@@ -441,6 +442,13 @@ fn prepare_vasp_job(
     Ok(sbatch_path)
 }
 
+fn submit_script_arg(sbatch_path: &Path) -> PathBuf {
+    sbatch_path
+        .file_name()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| sbatch_path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +515,12 @@ mod tests {
         assert!(!job_dir.join("KPOINTS").exists());
 
         fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn submit_script_arg_uses_local_script_name() {
+        let sbatch_path = PathBuf::from("jobs/TiC-957221-4973-44/submit.sbatch");
+
+        assert_eq!(submit_script_arg(&sbatch_path), PathBuf::from("submit.sbatch"));
     }
 }
