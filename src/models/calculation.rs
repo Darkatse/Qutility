@@ -1,12 +1,13 @@
-//! # DFT 计算结果数据模型
+//! # DFT 计算领域模型
 //!
-//! 存储 VASP/CASTEP 计算结果的提取信息。
+//! 定义 DFT 结果、作业状态与扫描记录的数据结构。
 //!
 //! ## 依赖关系
-//! - 被 `parsers/outcar.rs`, `parsers/castep_out.rs` 使用
-//! - 被 `commands/analyze.rs`, `commands/collect.rs` 使用
+//! - 被 `parsers/` 写入，被 `dft/` 与 `commands/` 读取
+//! - 不依赖 CLI，仅承载共享领域语义
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// DFT 计算代码类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,7 +25,29 @@ impl std::fmt::Display for DftCodeType {
     }
 }
 
-/// DFT 计算结果
+/// DFT 作业状态
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CalculationStatus {
+    Completed,
+    Failed,
+    Incomplete,
+    MissingOutput,
+    ParseError,
+}
+
+impl std::fmt::Display for CalculationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CalculationStatus::Completed => write!(f, "completed"),
+            CalculationStatus::Failed => write!(f, "failed"),
+            CalculationStatus::Incomplete => write!(f, "incomplete"),
+            CalculationStatus::MissingOutput => write!(f, "missing-output"),
+            CalculationStatus::ParseError => write!(f, "parse-error"),
+        }
+    }
+}
+
+/// 已解析的 DFT 结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DftResult {
     /// 结构名称
@@ -32,9 +55,6 @@ pub struct DftResult {
 
     /// 使用的 DFT 代码
     pub code: DftCodeType,
-
-    /// 计算是否完成
-    pub is_finished: bool,
 
     /// 焓 (eV) - 恒压计算的相关量
     pub enthalpy_ev: Option<f64>,
@@ -50,9 +70,25 @@ pub struct DftResult {
 
     /// 原子数
     pub num_atoms: Option<usize>,
+}
 
-    /// 结构文件路径（CONTCAR 或 .cell）
-    pub structure_file: Option<String>,
+/// 单个作业目录的扫描结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalculationScanRecord {
+    /// 结构名称
+    pub structure_name: String,
+    /// 作业目录
+    pub job_dir: PathBuf,
+    /// 使用的 DFT 代码
+    pub code: DftCodeType,
+    /// 扫描得到的状态
+    pub status: CalculationStatus,
+    /// 状态说明或失败原因
+    pub reason: Option<String>,
+    /// 结构文件路径（CONTCAR / POSCAR / .cell）
+    pub structure_file: Option<PathBuf>,
+    /// 已解析结果，仅在可解析时存在
+    pub parsed: Option<DftResult>,
 }
 
 impl DftResult {
@@ -60,13 +96,11 @@ impl DftResult {
         DftResult {
             structure_name: structure_name.into(),
             code,
-            is_finished: false,
             enthalpy_ev: None,
             energy_ev: None,
             pressure_kbar: None,
             volume: None,
             num_atoms: None,
-            structure_file: None,
         }
     }
 
@@ -83,6 +117,25 @@ impl DftResult {
         match (self.energy_ev, self.num_atoms) {
             (Some(e), Some(n)) if n > 0 => Some(e / n as f64),
             _ => None,
+        }
+    }
+}
+
+impl CalculationScanRecord {
+    pub fn new(
+        structure_name: impl Into<String>,
+        job_dir: PathBuf,
+        code: DftCodeType,
+        status: CalculationStatus,
+    ) -> Self {
+        Self {
+            structure_name: structure_name.into(),
+            job_dir,
+            code,
+            status,
+            reason: None,
+            structure_file: None,
+            parsed: None,
         }
     }
 }

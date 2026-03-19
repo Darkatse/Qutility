@@ -521,6 +521,9 @@ mod tests {
     fn submit_script_arg_uses_local_script_name() {
         let sbatch_path = PathBuf::from("jobs/TiC-957221-4973-44/submit.sbatch");
 
-        assert_eq!(submit_script_arg(&sbatch_path), PathBuf::from("submit.sbatch"));
+        assert_eq!(
+            submit_script_arg(&sbatch_path),
+            PathBuf::from("submit.sbatch")
+        );
     }
 }

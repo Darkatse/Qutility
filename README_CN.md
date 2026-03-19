@@ -94,7 +94,8 @@ cargo install cross --locked
 | 命令 | 功能 | 并行？ |
 |------|------|--------|
 | `convert` | 结构文件格式互转 | ✅ 是 |
-| `analyze dft` | 解析 & 排名 DFT 结果 (VASP/CASTEP) | ✅ 是 |
+| `analyze dft-status` | 扫描 DFT 作业状态并导出重算名单 | ✅ 是 |
+| `analyze dft-postprocessing` / `analyze dft-pp` | 对已完成 DFT 结果做后处理 | ✅ 是 |
 | `analyze xrd` | 计算 X 射线衍射图谱 | ✅ 是 |
 | `collect` | 收集已完成的 DFT 作业转为 `.res` | ✅ 是 |
 | `submit` | 生成并提交 Slurm 批处理作业 | — |
@@ -130,25 +131,44 @@ qutility convert -i ./raw/ -o ./reduced/ -t cell --niggli
 
 ---
 
-## Analyze DFT：结果解析器
+## Analyze DFT Status：作业状态扫描
 
-别再手动 grep OUTCAR 文件了。让 Qutility 帮你搞定！
+扫描作业目录，显式区分完成、失败、未完成等状态，并导出重算名单。
 
 ```bash
-# 解析 VASP 结果并按能量排名
-qutility analyze dft --job-dir ./calculations/ --code vasp --top-n 20
+# 导出 failed + incomplete 的纯文本重算名单
+qutility analyze dft-status --job-dir ./jobs/ --code vasp --output retry.txt
 
-# 与 EDDP 预测对比（还能画漂亮的图！）
-qutility analyze dft --job-dir ./dft_jobs/ --csv-file eddp_ranking.csv --code castep
-
-# 导出排名结果
-qutility analyze dft --job-dir ./jobs/ --code vasp --output-csv final_ranking.csv
+# 只导出显式 failed，并写成单列 CSV
+qutility analyze dft-status --job-dir ./jobs/ --code castep --failed-only --format csv --output retry.csv
 ```
 
 **输出：**
-- 按焓/能量排名的结构列表
-- 对比图（如果提供了 EDDP CSV）
-- 包含所有解析数据的详细 CSV
+- completed / failed / incomplete / missing-output / parse-error 状态汇总
+- 终端中的重算候选表
+- 可选导出的纯文本或单列 CSV 名单
+
+---
+
+## Analyze DFT Postprocessing：结果后处理
+
+对已完成并可解析的 DFT 结果做排序、导出和可选绘图。
+
+```bash
+# 解析已完成的 VASP 结果并按焓排序
+qutility analyze dft-postprocessing --job-dir ./calculations/ --code vasp --top-n 20
+
+# 简写别名
+qutility analyze dft-pp --job-dir ./dft_jobs/ --code castep
+
+# 导出排名结果
+qutility analyze dft-postprocessing --job-dir ./jobs/ --code vasp --output-csv final_ranking.csv
+```
+
+**输出：**
+- 按最终 DFT 焓排序的结构列表
+- 指定排名区间的可选对比图
+- 包含后处理结果的详细 CSV
 
 ---
 
@@ -239,6 +259,7 @@ qutility
 ├── cli/          # 命令行参数解析 (clap)
 ├── commands/     # 命令执行逻辑
 │   └── analyze/  # DFT 和 XRD 分析子命令
+├── dft/          # 共享 DFT 作业扫描与状态分类
 ├── batch/        # 并行处理基础设施
 ├── models/       # Crystal, Lattice, Atom 数据结构
 ├── parsers/      # 文件格式解析器 (.res, .cell, POSCAR, OUTCAR...)

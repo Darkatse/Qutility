@@ -1,11 +1,10 @@
-//! # 命令执行模块
+//! # Command execution module
 //!
-//! 实现各子命令的业务逻辑。
+//! Implements the concrete workflows behind each top-level command.
 //!
-//! ## 依赖关系
-//! - 被 `main.rs` 调用
-//! - 使用 `cli/`, `parsers/`, `models/`, `utils/`
-//! - 子模块: convert, analyze, collect, submit
+//! ## Coupling
+//! - Invoked by `main.rs`
+//! - Uses `cli/`, `dft/`, `parsers/`, `models/`, and `utils/`
 
 pub mod analyze;
 pub mod collect;
@@ -15,7 +14,6 @@ pub mod submit;
 use crate::cli::Commands;
 use crate::error::Result;
 
-/// 执行命令
 pub fn run(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::Convert(args) => convert::execute(args),

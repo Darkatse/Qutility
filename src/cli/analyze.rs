@@ -1,8 +1,6 @@
 //! # analyze 子命令 CLI 定义
 //!
-//! 分析功能统一入口，包含多个子命令：
-//! - `dft`: DFT 计算结果分析
-//! - `xrd`: X 射线衍射图样计算
+//! 分析功能统一入口，包含 DFT 状态扫描、DFT 后处理与 XRD 计算。
 //!
 //! ## 依赖关系
 //! - 被 `cli/mod.rs` 使用
@@ -10,6 +8,8 @@
 
 use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+use crate::models::DftCodeType;
 
 // ─────────────────────────────────────────────────────────────
 // Analyze 主命令
@@ -25,8 +25,13 @@ pub struct AnalyzeArgs {
 /// analyze 子命令
 #[derive(Subcommand, Debug)]
 pub enum AnalyzeCommands {
-    /// Analyze DFT calculation results (VASP/CASTEP)
-    Dft(DftArgs),
+    /// Scan DFT job status and export retry candidates
+    #[command(name = "dft-status")]
+    DftStatus(DftStatusArgs),
+
+    /// Postprocess completed DFT results (VASP/CASTEP)
+    #[command(name = "dft-postprocessing", visible_alias = "dft-pp")]
+    DftPostprocessing(DftPostprocessingArgs),
 
     /// Calculate X-ray diffraction pattern from structure
     Xrd(XrdArgs),
@@ -54,13 +59,60 @@ impl std::fmt::Display for DftCode {
     }
 }
 
-/// DFT 分析子命令参数
-#[derive(Args, Debug)]
-pub struct DftArgs {
-    /// Path to the input CSV file from EDDP/Repose search
-    #[arg(long)]
-    pub csv_file: Option<PathBuf>,
+impl From<DftCode> for DftCodeType {
+    fn from(code: DftCode) -> Self {
+        match code {
+            DftCode::Vasp => DftCodeType::Vasp,
+            DftCode::Castep => DftCodeType::Castep,
+        }
+    }
+}
 
+/// 重算名单输出格式
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum RetryListFormat {
+    /// Plain text, one structure name per line
+    Text,
+    /// CSV with a single `structure` header
+    Csv,
+}
+
+impl std::fmt::Display for RetryListFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RetryListFormat::Text => write!(f, "text"),
+            RetryListFormat::Csv => write!(f, "csv"),
+        }
+    }
+}
+
+/// DFT 状态扫描子命令参数
+#[derive(Args, Debug)]
+pub struct DftStatusArgs {
+    /// Path to the root directory containing DFT calculation folders
+    #[arg(long)]
+    pub job_dir: PathBuf,
+
+    /// Specify the DFT code used
+    #[arg(long, value_enum)]
+    pub code: DftCode,
+
+    /// Export retry list to file
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    /// Retry list output format
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: RetryListFormat,
+
+    /// Only export explicitly failed jobs
+    #[arg(long, default_value_t = false)]
+    pub failed_only: bool,
+}
+
+/// DFT 后处理子命令参数
+#[derive(Args, Debug)]
+pub struct DftPostprocessingArgs {
     /// Path to the root directory containing DFT calculation folders
     #[arg(long)]
     pub job_dir: PathBuf,

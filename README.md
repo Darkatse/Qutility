@@ -93,7 +93,8 @@ If you opt to use `cross`, you'll also need to have either Docker or Podman set 
 | Command | What it does | Parallel? |
 |---------|--------------|-----------|
 | `convert` | Convert structure files between formats | ✅ Yes |
-| `analyze dft` | Parse & rank DFT results (VASP/CASTEP) | ✅ Yes |
+| `analyze dft-status` | Scan DFT job status and export retry lists | ✅ Yes |
+| `analyze dft-postprocessing` / `analyze dft-pp` | Postprocess completed DFT results | ✅ Yes |
 | `analyze xrd` | Calculate X-ray diffraction patterns | ✅ Yes |
 | `collect` | Gather completed DFT jobs into `.res` | ✅ Yes |
 | `submit` | Generate & submit Slurm batch jobs | — |
@@ -129,25 +130,44 @@ qutility convert -i ./raw/ -o ./reduced/ -t cell --niggli
 
 ---
 
-## Analyze DFT: Results Parser
+## Analyze DFT Status
 
-Stop manually grep-ing through OUTCAR files. Let Qutility do the heavy lifting.
+Scan job folders, classify them explicitly, and export retry lists for reruns.
 
 ```bash
-# Parse VASP results and rank by energy
-qutility analyze dft --job-dir ./calculations/ --code vasp --top-n 20
+# Export failed + incomplete jobs as plain text
+qutility analyze dft-status --job-dir ./jobs/ --code vasp --output retry.txt
 
-# Compare with EDDP predictions (with beautiful plots!)
-qutility analyze dft --job-dir ./dft_jobs/ --csv-file eddp_ranking.csv --code castep
-
-# Export ranked results
-qutility analyze dft --job-dir ./jobs/ --code vasp --output-csv final_ranking.csv
+# Export only explicit failures as CSV
+qutility analyze dft-status --job-dir ./jobs/ --code castep --failed-only --format csv --output retry.csv
 ```
 
 **Output:**
-- Ranked structure list (by enthalpy/energy per atom)
-- Comparison plots (if EDDP CSV provided)
-- Detailed CSV with all parsed data
+- Status summary for completed / failed / incomplete / missing-output / parse-error
+- Retry candidate table in terminal
+- Optional retry list as plain text or single-column CSV
+
+---
+
+## Analyze DFT Postprocessing
+
+Postprocess completed DFT calculations into ranked results and optional plots.
+
+```bash
+# Parse completed VASP results and rank by enthalpy
+qutility analyze dft-postprocessing --job-dir ./calculations/ --code vasp --top-n 20
+
+# Short alias
+qutility analyze dft-pp --job-dir ./dft_jobs/ --code castep
+
+# Export ranked results
+qutility analyze dft-postprocessing --job-dir ./jobs/ --code vasp --output-csv final_ranking.csv
+```
+
+**Output:**
+- Ranked structure list by final DFT enthalpy
+- Optional comparison plot for a selected rank range
+- Detailed CSV with all postprocessed results
 
 ---
 
@@ -238,6 +258,7 @@ qutility
 ├── cli/          # Command-line argument parsing (clap)
 ├── commands/     # Command execution logic
 │   └── analyze/  # DFT & XRD analysis subcommands
+├── dft/          # Shared DFT job scanning and status classification
 ├── batch/        # Parallel processing infrastructure
 ├── models/       # Crystal, Lattice, Atom data structures
 ├── parsers/      # File format parsers (.res, .cell, POSCAR, OUTCAR...)

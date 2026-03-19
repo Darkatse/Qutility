@@ -1,18 +1,10 @@
-//! # CLI 模块
+//! # CLI module
 //!
-//! 使用 `clap` 定义命令行参数和子命令。
+//! Defines the clap-based command tree for convert, analyze, collect, and submit.
 //!
-//! ## 命令结构
-//! - `convert`: 结构格式转换
-//! - `analyze`: 分析功能（嵌套子命令）
-//!   - `dft`: DFT 计算结果分析
-//!   - `xrd`: XRD 衍射图样计算
-//! - `collect`: 收集 DFT 结果
-//! - `submit`: 批量作业提交
-//!
-//! ## 依赖关系
-//! - 被 `main.rs` 使用
-//! - 子模块: convert, analyze, collect, submit
+//! ## Coupling
+//! - Used directly by `main.rs`
+//! - Hands parsed arguments to `commands/`
 
 pub mod analyze;
 pub mod collect;
@@ -21,7 +13,6 @@ pub mod submit;
 
 use clap::{Parser, Subcommand};
 
-/// Qutility - 计算凝聚态物理统一工具箱
 #[derive(Parser)]
 #[command(name = "qutility")]
 #[command(author = "Changjiang Wu")]
@@ -33,13 +24,12 @@ pub struct Cli {
     pub command: Commands,
 }
 
-/// 可用的子命令
 #[derive(Subcommand)]
 pub enum Commands {
     /// Convert structure files between formats (.res, .cell, .cif, POSCAR)
     Convert(convert::ConvertArgs),
 
-    /// Analyze DFT calculation results
+    /// Analyze DFT job status, DFT results, or XRD patterns
     Analyze(analyze::AnalyzeArgs),
 
     /// Collect completed DFT results and convert to .res format

@@ -1,28 +1,21 @@
-//! # DFT 分析子命令实现
+//! # DFT 后处理子命令实现
 //!
-//! 分析 VASP/CASTEP 计算结果并可视化。
-//!
-//! ## 功能
-//! - 扫描完成的 VASP/CASTEP 计算
-//! - 提取焓并重新排序
-//! - 生成终端表格和 CSV 输出
-//! - 可选绘制比较图
+//! 对已完成并可解析的 DFT 结果进行排序、导出与可选绘图。
 //!
 //! ## 依赖关系
 //! - 使用 `cli/analyze.rs` 定义的参数
-//! - 使用 `parsers/outcar.rs`, `parsers/castep_out.rs`
-//! - 使用 `utils/output.rs`, `utils/progress.rs`
+//! - 复用 `dft/` 扫描模块与 `utils/output.rs`
 
-use crate::cli::analyze::{DftArgs, DftCode};
+use crate::cli::analyze::DftPostprocessingArgs;
+use crate::dft::scan_calculations;
 use crate::error::{QutilityError, Result};
-use crate::parsers::{castep_out, outcar};
-use crate::utils::{output, progress};
+use crate::models::{CalculationStatus, DftCodeType, DftResult};
+use crate::utils::output;
 
-use std::fs;
 use std::path::Path;
 use tabled::{Table, Tabled};
 
-/// 分析结果行
+/// 后处理结果表
 #[derive(Debug, Clone, Tabled)]
 struct ResultRow {
     #[tabled(rename = "Rank")]
@@ -35,124 +28,100 @@ struct ResultRow {
     delta_h: String,
 }
 
-/// 执行 DFT 分析
-pub fn execute(args: DftArgs) -> Result<()> {
-    output::print_header("Analyzing DFT Results");
+pub fn execute(args: DftPostprocessingArgs) -> Result<()> {
+    output::print_header("DFT Postprocessing");
 
-    // 验证目录
-    if !args.job_dir.exists() {
-        return Err(QutilityError::DirectoryNotFound {
-            path: args.job_dir.display().to_string(),
-        });
-    }
+    let code: DftCodeType = args.code.into();
+    let records = scan_calculations(&args.job_dir, code)?;
 
-    // 扫描所有子目录
-    output::print_info(&format!(
-        "Scanning '{}' for {} calculations...",
-        args.job_dir.display(),
-        args.code
-    ));
+    let parse_error_count = records
+        .iter()
+        .filter(|record| record.status == CalculationStatus::ParseError)
+        .count();
 
-    let entries: Vec<_> = fs::read_dir(&args.job_dir)
-        .map_err(|e| QutilityError::FileReadError {
-            path: args.job_dir.display().to_string(),
-            source: e,
-        })?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
+    let completed_without_enthalpy = records
+        .iter()
+        .filter(|record| {
+            record.status == CalculationStatus::Completed
+                && record
+                    .parsed
+                    .as_ref()
+                    .and_then(|result| result.enthalpy_ev)
+                    .is_none()
+        })
+        .count();
+
+    let mut results: Vec<DftResult> = records
+        .into_iter()
+        .filter_map(|record| match (record.status, record.parsed) {
+            (CalculationStatus::Completed, Some(result)) if result.enthalpy_ev.is_some() => {
+                Some(result)
+            }
+            _ => None,
+        })
         .collect();
-
-    let pb = progress::create_progress_bar(entries.len() as u64, "Parsing");
-
-    let mut results = Vec::new();
-
-    for entry in &entries {
-        let structure_name = entry.file_name().to_string_lossy().to_string();
-        let calc_dir = entry.path();
-
-        let dft_result = match args.code {
-            DftCode::Vasp => {
-                let outcar_path = calc_dir.join("OUTCAR");
-                if outcar_path.exists() {
-                    outcar::parse_outcar(&outcar_path, &structure_name).ok()
-                } else {
-                    None
-                }
-            }
-            DftCode::Castep => {
-                let castep_path = calc_dir.join(format!("{}.castep", structure_name));
-                if castep_path.exists() {
-                    castep_out::parse_castep_output(&castep_path, &structure_name).ok()
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(result) = dft_result {
-            if result.is_finished && result.enthalpy_ev.is_some() {
-                results.push(result);
-            }
-        }
-
-        pb.inc(1);
-    }
-
-    pb.finish_and_clear();
 
     if results.is_empty() {
         output::print_warning("No completed DFT calculations found with valid enthalpy.");
         return Ok(());
     }
 
-    output::print_info(&format!("Found {} completed calculations", results.len()));
-
-    // 按焓排序
     results.sort_by(|a, b| {
         a.enthalpy_ev
             .partial_cmp(&b.enthalpy_ev)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // 找到最低焓作为参考
-    let min_enthalpy = results[0].enthalpy_ev.unwrap_or(0.0);
+    output::print_info(&format!(
+        "Found {} completed calculations with valid enthalpy",
+        results.len()
+    ));
 
-    // 生成表格数据
+    if completed_without_enthalpy > 0 {
+        output::print_warning(&format!(
+            "{} completed calculations were skipped because enthalpy could not be extracted",
+            completed_without_enthalpy
+        ));
+    }
+
+    if parse_error_count > 0 {
+        output::print_warning(&format!(
+            "{} completed calculations were skipped because parsing failed",
+            parse_error_count
+        ));
+    }
+
+    let min_enthalpy = results[0].enthalpy_ev.expect("validated before sorting");
     let table_rows: Vec<ResultRow> = results
         .iter()
         .take(args.top_n)
         .enumerate()
-        .map(|(i, r)| {
-            let h = r.enthalpy_ev.unwrap_or(0.0);
+        .map(|(i, result)| {
+            let enthalpy = result.enthalpy_ev.expect("validated before sorting");
             ResultRow {
                 rank: i + 1,
-                structure: r.structure_name.clone(),
-                enthalpy: format!("{:.6}", h),
-                delta_h: format!("{:.6}", h - min_enthalpy),
+                structure: result.structure_name.clone(),
+                enthalpy: format!("{enthalpy:.6}"),
+                delta_h: format!("{:.6}", enthalpy - min_enthalpy),
             }
         })
         .collect();
 
-    // 显示表格
     output::print_header(&format!(
         "Top {} Structures by DFT Enthalpy",
         args.top_n.min(results.len())
     ));
+    println!("{}", Table::new(&table_rows));
 
-    let table = Table::new(&table_rows);
-    println!("{}", table);
-
-    // 保存完整 CSV
     save_results_csv(&results, &args.output_csv)?;
     output::print_success(&format!(
         "Full ranking saved to '{}'",
         args.output_csv.display()
     ));
 
-    // 生成图表（如果请求）
     if !args.no_plot {
         if let Some(ref range) = args.plot_range {
-            generate_plot(&results, range, &args.output_plot, min_enthalpy)?;
+            generate_plot(&results, range, &args.output_plot)?;
             output::print_success(&format!(
                 "Comparison plot saved to '{}'",
                 args.output_plot.display()
@@ -163,22 +132,20 @@ pub fn execute(args: DftArgs) -> Result<()> {
     Ok(())
 }
 
-/// 保存结果到 CSV
-fn save_results_csv(results: &[crate::models::DftResult], output_path: &Path) -> Result<()> {
-    let mut wtr = csv::Writer::from_path(output_path).map_err(|e| QutilityError::CsvError(e))?;
+fn save_results_csv(results: &[DftResult], output_path: &Path) -> Result<()> {
+    let mut wtr = csv::Writer::from_path(output_path).map_err(QutilityError::CsvError)?;
 
-    wtr.write_record(&["dft_rank", "structure", "enthalpy_eV"])
-        .map_err(|e| QutilityError::CsvError(e))?;
+    wtr.write_record(["dft_rank", "structure", "enthalpy_eV"])
+        .map_err(QutilityError::CsvError)?;
 
-    for (i, r) in results.iter().enumerate() {
-        wtr.write_record(&[
+    for (i, result) in results.iter().enumerate() {
+        let enthalpy = result.enthalpy_ev.expect("validated before writing");
+        wtr.write_record([
             (i + 1).to_string(),
-            r.structure_name.clone(),
-            r.enthalpy_ev
-                .map(|h| format!("{:.10}", h))
-                .unwrap_or_default(),
+            result.structure_name.clone(),
+            format!("{enthalpy:.10}"),
         ])
-        .map_err(|e| QutilityError::CsvError(e))?;
+        .map_err(QutilityError::CsvError)?;
     }
 
     wtr.flush().map_err(|e| QutilityError::FileWriteError {
@@ -189,16 +156,9 @@ fn save_results_csv(results: &[crate::models::DftResult], output_path: &Path) ->
     Ok(())
 }
 
-/// 生成比较图
-fn generate_plot(
-    results: &[crate::models::DftResult],
-    range: &str,
-    output_path: &Path,
-    _min_enthalpy: f64,
-) -> Result<()> {
+fn generate_plot(results: &[DftResult], range: &str, output_path: &Path) -> Result<()> {
     use plotters::prelude::*;
 
-    // 解析范围
     let (start, end) = parse_range(range)?;
     let start_idx = start.saturating_sub(1);
     let end_idx = end.min(results.len());
@@ -210,12 +170,13 @@ fn generate_plot(
     let plot_data: Vec<(usize, f64)> = results[start_idx..end_idx]
         .iter()
         .enumerate()
-        .filter_map(|(i, r)| r.enthalpy_ev.map(|h| (start + i, h)))
+        .map(|(i, result)| {
+            (
+                start + i,
+                result.enthalpy_ev.expect("validated before plotting"),
+            )
+        })
         .collect();
-
-    if plot_data.is_empty() {
-        return Err(QutilityError::Other("No data to plot".to_string()));
-    }
 
     let y_min = plot_data
         .iter()
@@ -249,7 +210,6 @@ fn generate_plot(
         .draw()
         .map_err(|e| QutilityError::Other(e.to_string()))?;
 
-    // 绘制数据点
     chart
         .draw_series(
             plot_data
@@ -260,7 +220,6 @@ fn generate_plot(
         .label("DFT Enthalpy")
         .legend(|(x, y)| Circle::new((x + 10, y), 5, RED.filled()));
 
-    // 连线
     chart
         .draw_series(LineSeries::new(
             plot_data.iter().map(|(x, y)| (*x as f64, *y)),
@@ -268,10 +227,9 @@ fn generate_plot(
         ))
         .map_err(|e| QutilityError::Other(e.to_string()))?;
 
-    // 标记最低点
     if let Some((min_x, min_y)) = plot_data
         .iter()
-        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .min_by(|a, b| a.1.partial_cmp(&b.1).expect("finite enthalpy"))
     {
         chart
             .draw_series(std::iter::once(Circle::new(
@@ -287,8 +245,8 @@ fn generate_plot(
     chart
         .configure_series_labels()
         .position(SeriesLabelPosition::UpperRight)
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
+        .background_style(WHITE.mix(0.8))
+        .border_style(BLACK)
         .draw()
         .map_err(|e| QutilityError::Other(e.to_string()))?;
 
@@ -298,7 +256,6 @@ fn generate_plot(
     Ok(())
 }
 
-/// 解析范围字符串 (e.g., "1-10")
 fn parse_range(range: &str) -> Result<(usize, usize)> {
     let parts: Vec<&str> = range.split('-').collect();
     if parts.len() != 2 {

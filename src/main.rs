@@ -5,7 +5,8 @@
 //! ## 子命令
 //! - `convert` - 结构格式转换 (.res, .cell, .cif, POSCAR)
 //! - `analyze` - 分析功能
-//!   - `dft` - DFT 计算结果分析
+//!   - `dft-status` - DFT 作业状态扫描
+//!   - `dft-postprocessing` - DFT 完成结果后处理
 //!   - `xrd` - XRD 衍射图样计算
 //! - `collect` - 收集完成的 DFT 计算结果
 //! - `submit`  - 批量提交作业到 Slurm
@@ -25,6 +26,7 @@
 mod batch;
 mod cli;
 mod commands;
+mod dft;
 mod error;
 mod models;
 mod parsers;
