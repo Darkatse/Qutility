@@ -359,9 +359,6 @@ fn prepare_vasp_job(
     let incar_template = args.incar_template.as_ref().ok_or_else(|| {
         QutilityError::InvalidArgument("VASP requires --incar-template".to_string())
     })?;
-    let kpoints_template = args.kpoints_template.as_ref().ok_or_else(|| {
-        QutilityError::InvalidArgument("VASP requires --kpoints-template".to_string())
-    })?;
 
     // 复制文件
     fs::copy(poscar_src, job_dir.join("POSCAR")).map_err(|e| QutilityError::FileWriteError {
@@ -374,12 +371,19 @@ fn prepare_vasp_job(
         source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
     })?;
 
-    fs::copy(kpoints_template, job_dir.join("KPOINTS")).map_err(|e| {
-        QutilityError::FileWriteError {
-            path: job_dir.join("KPOINTS").display().to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
-        }
-    })?;
+    if let Some(kpoints_template) = args.kpoints_template.as_ref() {
+        fs::copy(kpoints_template, job_dir.join("KPOINTS")).map_err(|e| {
+            QutilityError::FileWriteError {
+                path: job_dir.join("KPOINTS").display().to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+            }
+        })?;
+    } else {
+        output::print_warning(&format!(
+            "No KPOINTS template for {}, please provide manually if needed",
+            structure_name
+        ));
+    }
 
     // POTCAR 处理
     let potcar_dst = job_dir.join("POTCAR");
@@ -435,4 +439,73 @@ fn prepare_vasp_job(
     })?;
 
     Ok(sbatch_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before UNIX_EPOCH")
+            .as_nanos();
+        std::env::temp_dir().join(format!("qutility-{name}-{nanos}"))
+    }
+
+    fn base_submit_args() -> SubmitArgs {
+        SubmitArgs {
+            csv: PathBuf::from("structures.csv"),
+            struct_dir: PathBuf::from("structures"),
+            range: "1".to_string(),
+            jobs_root: PathBuf::from("jobs"),
+            dft: DftEngine::Vasp,
+            param_template: None,
+            castep_exec: "castep.mpi".to_string(),
+            castep_np: 32,
+            castep_modules: "airss/arm-v2/0.2,castep/arm-v2/25.12".to_string(),
+            external_pressure: None,
+            incar_template: None,
+            kpoints_template: None,
+            potcar_dir: None,
+            vasp_exec: "vasp_std".to_string(),
+            vasp_np: 32,
+            vasp_modules: String::new(),
+            partition: "arm".to_string(),
+            constraint: "neoverse_v2".to_string(),
+            nodes: 1,
+            ntasks: 32,
+            cpus_per_task: 1,
+            mem_per_cpu: "3G".to_string(),
+            time: "24:00:00".to_string(),
+            dry_run: true,
+            submit: false,
+        }
+    }
+
+    #[test]
+    fn prepare_vasp_job_allows_missing_kpoints_template() {
+        let root = unique_test_dir("vasp-no-kpoints");
+        let job_dir = root.join("job");
+        fs::create_dir_all(&job_dir).expect("create job dir");
+
+        let poscar_src = root.join("POSCAR.src");
+        let incar_template = root.join("INCAR.template");
+        fs::write(&poscar_src, "POSCAR\n").expect("write POSCAR");
+        fs::write(&incar_template, "INCAR\n").expect("write INCAR");
+
+        let mut args = base_submit_args();
+        args.incar_template = Some(incar_template.clone());
+
+        let sbatch_path =
+            prepare_vasp_job(&args, &job_dir, "test-structure", &poscar_src).expect("prepare");
+
+        assert!(sbatch_path.exists());
+        assert!(job_dir.join("POSCAR").exists());
+        assert!(job_dir.join("INCAR").exists());
+        assert!(!job_dir.join("KPOINTS").exists());
+
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
 }

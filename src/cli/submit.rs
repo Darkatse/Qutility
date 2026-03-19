@@ -73,7 +73,7 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub incar_template: Option<PathBuf>,
 
-    /// VASP KPOINTS template file
+    /// Optional VASP KPOINTS template file
     #[arg(long)]
     pub kpoints_template: Option<PathBuf>,
 

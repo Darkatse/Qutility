@@ -171,6 +171,10 @@ qutility submit --csv structures.csv --struct-dir ./cells/ --range 1-50 --submit
 # VASP with custom settings
 qutility submit --csv list.csv --struct-dir ./poscars/ --range 1-20 \
     --dft vasp --vasp-np 64 --time 48:00:00 --submit
+
+# Optional: provide a KPOINTS template when needed
+qutility submit --csv list.csv --struct-dir ./poscars/ --range 1-20 \
+    --dft vasp --incar-template ./INCAR --kpoints-template ./KPOINTS --dry-run
 ```
 
 ---

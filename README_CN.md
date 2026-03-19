@@ -171,6 +171,10 @@ qutility submit --csv structures.csv --struct-dir ./cells/ --range 1-50 --submit
 # 自定义配置的 VASP 作业
 qutility submit --csv list.csv --struct-dir ./poscars/ --range 1-20 \
     --dft vasp --vasp-np 64 --time 48:00:00 --submit
+
+# 可选：需要时再提供 KPOINTS 模板
+qutility submit --csv list.csv --struct-dir ./poscars/ --range 1-20 \
+    --dft vasp --incar-template ./INCAR --kpoints-template ./KPOINTS --dry-run
 ```
 
 ---
