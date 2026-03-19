@@ -48,6 +48,44 @@ cp target/release/qutility ~/.local/bin/
 
 Download the pre-built binary from [Releases](https://github.com/Darkatse/Qutility/releases) and drop it in your `$PATH`. Done.
 
+### Cross-Platform Compilation
+
+You're right—but what if I *insist* on compiling it myself? *Sigh*... alright, I suppose that works too.
+Most HPC clusters run on Linux x64, right? Unfortunately, most people don't use Linux as their daily desktop OS, so we have to turn to cross-compilation. Here are the target platforms we support:
+- `macos-x64`: Compile for Intel macOS from an Apple Silicon machine.
+- `macos-universal`: A single package that elegantly serves both camps—running seamlessly on both Apple Silicon and Intel Macs.
+- `linux-x64`: The primary build version, tailored specifically for clusters.
+
+Wait—you're actually using a Linux desktop environment? If you're already running Linux, why aren't you just handling the build yourself?
+
+If you're an Apple Silicon user looking to make your cross-platform compilation workflow a bit more elegant, Qutility now comes bundled with:
+- `Cross.toml`: The underlying configuration file for Linux x64 cross-compilation.
+- `scripts/build-cross.sh`: A script that wraps common build targets into a single, unified entry point.
+
+If you intend to compile for Linux x64, you'll first need to install the optional tool `cross`:
+
+```bash
+cargo install cross --locked
+```
+
+If you opt to use `cross`, you'll also need to have either Docker or Podman set up beforehand. Containers might seem like a hassle, but manually building a cross-compilation toolchain from scratch is an even bigger one. 
+```bash
+# Apple Silicon -> Intel macOS Binary
+./scripts/build-cross.sh macos-x64
+
+# Apple Silicon -> Universal macOS Binary (universal2)
+./scripts/build-cross.sh macos-universal
+
+# Build Linux x64 on macOS/Linux
+./scripts/build-cross.sh linux-x64
+```
+
+| Alias ​​| Rust Target Triple | Build Backend | Output File |
+|------|--------------------|---------------|-------------|
+| `macos-x64` | `x86_64-apple-darwin` | `cargo` | `target/x86_64-apple-darwin/release/qutility` |
+| `macos-universal` | `universal2-apple-darwin` | `cargo` + `lipo` | `target/universal2-apple-darwin/release/qutility` |
+| `linux-x64` | `x86_64-unknown-linux-gnu` | `cross` | `target/x86_64-unknown-linux-gnu/release/qutility` |
+
 ---
 
 ## Features at a Glance

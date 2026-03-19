@@ -46,7 +46,46 @@ cp target/release/qutility ~/.local/bin/
 
 ### 直接下载二进制
 
-从 [Releases](https://github.com/Darkatse/Qutility/releases) 下载预编译的二进制文件，放到 `$PATH` 里即可。搞定！
+最简单的方法。从 [Releases](https://github.com/Darkatse/Qutility/releases) 下载预编译的二进制文件，放到 `$PATH` 里即可。搞定！
+
+### 跨平台交叉编译
+
+你说的对，但我就想自己编译，怎么办？唉也行吧。
+大部分 HPC 集群基本都是 Linux x64 对吧，但是可惜一般人不会用 Linux 当桌面，那么只好借助交叉编译咯。以下是我们支持的目标：
+- `macos-x64`：Apple Silicon 编译 Intel macOS
+- `macos-universal`：一个包优雅端水，Apple Silicon 和 Intel Mac 都能跑
+- `linux-x64`：给集群准备的主力版本
+
+什么？你是 Linux 桌面环境？都用 Linux 了，你还不自己搞？
+
+如果你是 Apple Silicon 用户，想把跨平台编译搞得优雅一点，Qutility 现在自带：
+- `Cross.toml`：用于 Linux x64 的底层交叉编译配置
+- `scripts/build-cross.sh`：把常见目标封装成一个统一入口
+
+如果你要编译 Linux x64，先安装可选工具 `cross`：
+
+```bash
+cargo install cross --locked
+```
+
+如果你使用 `cross`，还需要先准备好 Docker 或 Podman。容器看起来麻烦，但手搓交叉工具链更麻烦。
+
+```bash
+# Apple Silicon -> Intel macOS 二进制
+./scripts/build-cross.sh macos-x64
+
+# Apple Silicon -> 通用 macOS 二进制（universal2）
+./scripts/build-cross.sh macos-universal
+
+# 在 macOS/Linux 上构建 Linux x64
+./scripts/build-cross.sh linux-x64
+```
+
+| 别名 | Rust 目标三元组 | 构建后端 | 输出文件 |
+|------|------------------|----------|----------|
+| `macos-x64` | `x86_64-apple-darwin` | `cargo` | `target/x86_64-apple-darwin/release/qutility` |
+| `macos-universal` | `universal2-apple-darwin` | `cargo` + `lipo` | `target/universal2-apple-darwin/release/qutility` |
+| `linux-x64` | `x86_64-unknown-linux-gnu` | `cross` | `target/x86_64-unknown-linux-gnu/release/qutility` |
 
 ---
 
