@@ -6,7 +6,7 @@
 //! - 被 `commands/submit.rs` 使用
 //! - 无外部模块依赖
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Slurm 作业配置
 pub struct SlurmConfig {
@@ -39,6 +39,7 @@ impl Default for SlurmConfig {
 
 /// 生成 sbatch 脚本内容
 pub fn generate_sbatch_script(config: &SlurmConfig, workdir: &Path, exec_cmd: &str) -> String {
+    let workdir = absolute_workdir(workdir);
     let module_loads = config
         .modules
         .iter()
@@ -92,6 +93,16 @@ sacct -o JobID,JobName,Partition,ReqMem,MaxRSS,MaxVMSize -j $SLURM_JOBID
     )
 }
 
+fn absolute_workdir(workdir: &Path) -> PathBuf {
+    if workdir.is_absolute() {
+        return workdir.to_path_buf();
+    }
+
+    std::env::current_dir()
+        .map(|cwd| cwd.join(workdir))
+        .unwrap_or_else(|_| workdir.to_path_buf())
+}
+
 /// 插入或替换 CASTEP .cell 文件中的 EXTERNAL_PRESSURE 块
 pub fn upsert_external_pressure_block(cell_text: &str, p_gpa: f64) -> String {
     use regex::Regex;
@@ -113,4 +124,24 @@ GPa
     let stripped = stripped.trim_end();
 
     format!("{}\n\n{}\n", stripped, block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_sbatch_script_uses_absolute_workdir() {
+        let config = SlurmConfig::default();
+        let relative = Path::new("jobs/test-job");
+        let expected = std::env::current_dir()
+            .expect("current dir")
+            .join(relative)
+            .display()
+            .to_string();
+
+        let script = generate_sbatch_script(&config, relative, "echo hello");
+
+        assert!(script.contains(&format!("cd \"{}\"", expected)));
+    }
 }
