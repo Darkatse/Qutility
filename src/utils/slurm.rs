@@ -63,6 +63,10 @@ pub fn generate_sbatch_script(config: &SlurmConfig, workdir: &Path, exec_cmd: &s
 
 set -euo pipefail
 
+if ! ulimit -s unlimited; then
+    echo "Warning: failed to set stack size to unlimited" >&2
+fi
+
 export MODULEPATH="/home/changjiangwu_umass_edu/Modulefiles:$MODULEPATH"
 module purge 2>&1
 {}
@@ -143,5 +147,14 @@ mod tests {
         let script = generate_sbatch_script(&config, relative, "echo hello");
 
         assert!(script.contains(&format!("cd \"{}\"", expected)));
+    }
+
+    #[test]
+    fn generate_sbatch_script_sets_unlimited_stack_size() {
+        let config = SlurmConfig::default();
+
+        let script = generate_sbatch_script(&config, Path::new("jobs/test-job"), "echo hello");
+
+        assert!(script.contains("ulimit -s unlimited"));
     }
 }
