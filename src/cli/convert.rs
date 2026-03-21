@@ -1,6 +1,6 @@
 //! # convert 子命令 CLI 定义
 //!
-//! 批量转换结构文件格式 (.res -> .cell/.cif/.xyz/POSCAR)
+//! 批量转换结构文件格式（支持 `.res/.cell/POSCAR` 等互转）
 //!
 //! ## 依赖关系
 //! - 被 `cli/mod.rs` 使用
@@ -12,6 +12,8 @@ use std::path::PathBuf;
 /// 支持的输出格式
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum OutputFormat {
+    /// AIRSS / SHLX .res format
+    Res,
     /// CASTEP .cell format
     Cell,
     /// Crystallographic Information File
@@ -27,6 +29,7 @@ pub enum OutputFormat {
 impl std::fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            OutputFormat::Res => write!(f, "res"),
             OutputFormat::Cell => write!(f, "cell"),
             OutputFormat::Cif => write!(f, "cif"),
             OutputFormat::Xyz => write!(f, "xyz"),

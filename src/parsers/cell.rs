@@ -26,6 +26,9 @@ use crate::models::{Atom, Crystal, Lattice};
 use std::fs;
 use std::path::Path;
 
+const BOHR_TO_ANG: f64 = 0.529_177_210_903;
+const NM_TO_ANG: f64 = 10.0;
+
 /// 解析 .cell 文件
 pub fn parse_cell_file(path: &Path) -> Result<Crystal> {
     let content = fs::read_to_string(path).map_err(|e| QutilityError::FileReadError {
@@ -96,17 +99,24 @@ fn find_block_start(content_upper: &str, block_name: &str) -> Option<usize> {
 fn parse_lattice_cart(lines: &[&str], start: usize) -> Result<Lattice> {
     let mut matrix = [[0.0; 3]; 3];
     let mut row_idx = 0;
+    let mut length_scale = 1.0;
 
     for line in lines.iter().skip(start + 1) {
         let line = line.trim();
         if line.to_uppercase().starts_with("%ENDBLOCK") {
             break;
         }
-        // 跳过单位行（如 "ang" 或 "bohr"）
-        if line.eq_ignore_ascii_case("ang")
-            || line.eq_ignore_ascii_case("bohr")
-            || line.eq_ignore_ascii_case("nm")
-        {
+
+        if line.eq_ignore_ascii_case("ang") || line.eq_ignore_ascii_case("angstrom") {
+            length_scale = 1.0;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("bohr") {
+            length_scale = BOHR_TO_ANG;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("nm") {
+            length_scale = NM_TO_ANG;
             continue;
         }
         if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
@@ -119,7 +129,11 @@ fn parse_lattice_cart(lines: &[&str], start: usize) -> Result<Lattice> {
             .collect();
 
         if parts.len() >= 3 && row_idx < 3 {
-            matrix[row_idx] = [parts[0], parts[1], parts[2]];
+            matrix[row_idx] = [
+                parts[0] * length_scale,
+                parts[1] * length_scale,
+                parts[2] * length_scale,
+            ];
             row_idx += 1;
         }
     }
@@ -138,15 +152,26 @@ fn parse_lattice_cart(lines: &[&str], start: usize) -> Result<Lattice> {
 /// 解析 LATTICE_ABC 块
 fn parse_lattice_abc(lines: &[&str], start: usize) -> Result<Lattice> {
     let mut params: Vec<f64> = Vec::new();
+    let mut length_scale = 1.0;
 
     for line in lines.iter().skip(start + 1) {
         let line = line.trim();
         if line.to_uppercase().starts_with("%ENDBLOCK") {
             break;
         }
-        if line.eq_ignore_ascii_case("ang")
-            || line.eq_ignore_ascii_case("bohr")
-            || line.is_empty()
+        if line.eq_ignore_ascii_case("ang") || line.eq_ignore_ascii_case("angstrom") {
+            length_scale = 1.0;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("bohr") {
+            length_scale = BOHR_TO_ANG;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("nm") {
+            length_scale = NM_TO_ANG;
+            continue;
+        }
+        if line.is_empty()
             || line.starts_with('#')
             || line.starts_with('!')
         {
@@ -168,16 +193,22 @@ fn parse_lattice_abc(lines: &[&str], start: usize) -> Result<Lattice> {
         });
     }
 
+    params[0] *= length_scale;
+    params[1] *= length_scale;
+    params[2] *= length_scale;
+
     Ok(Lattice::from_parameters(
         params[0], params[1], params[2], params[3], params[4], params[5],
     ))
 }
 
 /// 解析原子位置块
-fn parse_positions(lines: &[&str], start: usize, _is_absolute: bool) -> Result<Vec<Atom>> {
+fn parse_positions(lines: &[&str], start: usize, is_absolute: bool) -> Result<Vec<Atom>> {
     let mut atoms = Vec::new();
+    let mut length_scale = 1.0;
 
-    for line in lines.iter().skip(start + 1) {
+    for (idx, line) in lines.iter().enumerate().skip(start + 1) {
+        let line_no = idx + 1;
         let line = line.trim();
         if line.to_uppercase().starts_with("%ENDBLOCK") {
             break;
@@ -186,16 +217,45 @@ fn parse_positions(lines: &[&str], start: usize, _is_absolute: bool) -> Result<V
             continue;
         }
 
+        if line.eq_ignore_ascii_case("ang") || line.eq_ignore_ascii_case("angstrom") {
+            length_scale = 1.0;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("bohr") {
+            length_scale = BOHR_TO_ANG;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("nm") {
+            length_scale = NM_TO_ANG;
+            continue;
+        }
+
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 4 {
             let element = parts[0].to_string();
-            if let (Ok(x), Ok(y), Ok(z)) = (
-                parts[1].parse::<f64>(),
-                parts[2].parse::<f64>(),
-                parts[3].parse::<f64>(),
-            ) {
-                atoms.push(Atom::new(element, [x, y, z]));
-            }
+            let x: f64 = parts[1].parse().map_err(|_| QutilityError::ParseError {
+                format: "cell".to_string(),
+                path: "unknown".to_string(),
+                reason: format!("Invalid atomic position at line {}", line_no),
+            })?;
+            let y: f64 = parts[2].parse().map_err(|_| QutilityError::ParseError {
+                format: "cell".to_string(),
+                path: "unknown".to_string(),
+                reason: format!("Invalid atomic position at line {}", line_no),
+            })?;
+            let z: f64 = parts[3].parse().map_err(|_| QutilityError::ParseError {
+                format: "cell".to_string(),
+                path: "unknown".to_string(),
+                reason: format!("Invalid atomic position at line {}", line_no),
+            })?;
+
+            let (x, y, z) = if is_absolute {
+                (x * length_scale, y * length_scale, z * length_scale)
+            } else {
+                (x, y, z)
+            };
+
+            atoms.push(Atom::new(element, [x, y, z]));
         }
     }
 
@@ -237,9 +297,9 @@ fn convert_abs_to_frac(atoms: Vec<Atom>, lattice: &Lattice) -> Vec<Atom> {
         .map(|atom| {
             let p = atom.position;
             let frac = [
-                inv[0][0] * p[0] + inv[0][1] * p[1] + inv[0][2] * p[2],
-                inv[1][0] * p[0] + inv[1][1] * p[1] + inv[1][2] * p[2],
-                inv[2][0] * p[0] + inv[2][1] * p[1] + inv[2][2] * p[2],
+                inv[0][0] * p[0] + inv[1][0] * p[1] + inv[2][0] * p[2],
+                inv[0][1] * p[0] + inv[1][1] * p[1] + inv[2][1] * p[2],
+                inv[0][2] * p[0] + inv[1][2] * p[1] + inv[2][2] * p[2],
             ];
             Atom::new(atom.element, frac)
         })
@@ -304,6 +364,26 @@ Cl 0.5 0.5 0.5
     }
 
     #[test]
+    fn test_parse_cell_lattice_cart_bohr_units() {
+        let content = r#"
+%BLOCK LATTICE_CART
+bohr
+9.44863 0.0 0.0
+0.0 9.44863 0.0
+0.0 0.0 9.44863
+%ENDBLOCK LATTICE_CART
+
+%BLOCK POSITIONS_FRAC
+Si 0.0 0.0 0.0
+%ENDBLOCK POSITIONS_FRAC
+"#;
+
+        let crystal = parse_cell_content(content, "Si").unwrap();
+        let (a, _, _, _, _, _) = crystal.lattice.parameters();
+        assert!((a - 5.0).abs() < 0.02);
+    }
+
+    #[test]
     fn test_parse_cell_lattice_abc() {
         let content = r#"
 %BLOCK LATTICE_ABC
@@ -324,6 +404,41 @@ Cl 0.5 0.5 0.5
         assert!((alpha - 90.0).abs() < 0.01);
         assert!((beta - 90.0).abs() < 0.01);
         assert!((gamma - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_cell_positions_abs_non_orthogonal() {
+        let lattice = Lattice::from_parameters(3.0, 3.0, 5.0, 90.0, 90.0, 120.0);
+        let frac = [0.25, 0.5, 0.1];
+        let m = lattice.matrix;
+        let cart = [
+            frac[0] * m[0][0] + frac[1] * m[1][0] + frac[2] * m[2][0],
+            frac[0] * m[0][1] + frac[1] * m[1][1] + frac[2] * m[2][1],
+            frac[0] * m[0][2] + frac[1] * m[1][2] + frac[2] * m[2][2],
+        ];
+
+        let content = format!(
+            "\
+%BLOCK LATTICE_CART
+ang
+3.0 0.0 0.0
+-1.5 2.598076211 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK POSITIONS_ABS
+ang
+Si {:.10} {:.10} {:.10}
+%ENDBLOCK POSITIONS_ABS
+",
+            cart[0], cart[1], cart[2]
+        );
+
+        let crystal = parse_cell_content(&content, "Hex").unwrap();
+        assert_eq!(crystal.atoms.len(), 1);
+        for i in 0..3 {
+            assert!((crystal.atoms[0].position[i] - frac[i]).abs() < 1e-8);
+        }
     }
 
     #[test]

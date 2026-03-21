@@ -10,7 +10,7 @@ use crate::cli::analyze::DftCode;
 use crate::cli::collect::CollectArgs;
 use crate::dft::scan_calculations;
 use crate::error::{QutilityError, Result};
-use crate::models::{CalculationStatus, DftCodeType};
+use crate::models::{CalculationStatus, DftCodeType, DftResult};
 use crate::parsers;
 use crate::parsers::res::to_res_string;
 use crate::utils::{output, progress};
@@ -51,7 +51,7 @@ pub fn execute(args: CollectArgs) -> Result<()> {
         let res_content = if args.use_cabal {
             convert_to_res_cabal(structure_file, &args.code)
         } else {
-            convert_to_res_native(structure_file, &record.structure_name)
+            convert_to_res_native(structure_file, &record.structure_name, record.parsed.as_ref())
         };
 
         match res_content {
@@ -116,9 +116,30 @@ pub fn execute(args: CollectArgs) -> Result<()> {
     Ok(())
 }
 
-fn convert_to_res_native(struct_file: &Path, structure_name: &str) -> Result<String> {
+fn convert_to_res_native(
+    struct_file: &Path,
+    structure_name: &str,
+    parsed: Option<&DftResult>,
+) -> Result<String> {
     let mut crystal = parsers::parse_structure_file(struct_file)?;
     crystal.name = structure_name.to_string();
+
+    if let Some(parsed) = parsed {
+        crystal.enthalpy = parsed.enthalpy_ev.or(parsed.energy_ev);
+        crystal.energy = parsed.energy_ev;
+        crystal.volume = parsed.volume;
+        crystal.pressure = parsed.pressure_kbar.map(|kbar| kbar * 0.1);
+
+        if let Some(expected) = parsed.num_atoms {
+            if expected != crystal.atoms.len() {
+                return Err(QutilityError::InvalidArgument(format!(
+                    "Atom count mismatch for {structure_name}: output says {expected}, structure file has {}",
+                    crystal.atoms.len()
+                )));
+            }
+        }
+    }
+
     Ok(to_res_string(&crystal))
 }
 
@@ -130,7 +151,7 @@ fn convert_to_res_cabal(struct_file: &Path, code: &DftCode) -> Result<String> {
         })?;
 
     let input_format = match code {
-        DftCode::Vasp => "castep",
+        DftCode::Vasp => "poscar",
         DftCode::Castep => "cell",
     };
 

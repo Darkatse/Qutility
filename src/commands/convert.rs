@@ -3,8 +3,8 @@
 //! 批量转换结构文件格式。
 //!
 //! ## 功能
-//! - 读取 .res 文件
-//! - 转换为 .cell, .cif, .xyz, .xtl, POSCAR 格式
+//! - 读取 `.res/.cell/POSCAR/CONTCAR` 等结构文件（按扩展名或文件名推断）
+//! - 转换为 `.res/.cell/.cif/.xyz/.xtl/POSCAR` 格式
 //! - 支持并行处理
 //! - 可选使用外部 `cabal` 命令作为 fallback
 //!
@@ -18,6 +18,7 @@ use crate::error::{QutilityError, Result};
 use crate::parsers;
 use crate::parsers::cell::to_cell_string;
 use crate::parsers::poscar::to_poscar_string;
+use crate::parsers::res::to_res_string;
 use crate::utils::{output, progress};
 
 use rayon::prelude::*;
@@ -168,6 +169,7 @@ fn convert_native(
         .unwrap_or("structure");
 
     let output_path = match target {
+        OutputFormat::Res => output_dir.join(format!("{}.res", stem)),
         OutputFormat::Cell => output_dir.join(format!("{}.cell", stem)),
         OutputFormat::Cif => output_dir.join(format!("{}.cif", stem)),
         OutputFormat::Xyz => output_dir.join(format!("{}.xyz", stem)),
@@ -185,6 +187,7 @@ fn convert_native(
 
     // 转换为目标格式
     let content = match target {
+        OutputFormat::Res => to_res_string(&crystal),
         OutputFormat::Cell => to_cell_string(&crystal),
         OutputFormat::Poscar => to_poscar_string(&crystal),
         OutputFormat::Cif => to_cif_string(&crystal),
@@ -201,6 +204,37 @@ fn convert_native(
     Ok(ConvertStatus::Success)
 }
 
+fn infer_cabal_format(input_path: &Path) -> Result<&'static str> {
+    let ext = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "res" => Ok("res"),
+        "shx" => Ok("shx"),
+        "cell" => Ok("cell"),
+        "cif" => Ok("cif"),
+        "xyz" => Ok("xyz"),
+        "xtl" => Ok("xtl"),
+        "vasp" | "poscar" | "contcar" => Ok("poscar"),
+        _ => {
+            if let Some(name) = input_path.file_name().and_then(|n| n.to_str()) {
+                let upper = name.to_uppercase();
+                if upper.starts_with("POSCAR") || upper.starts_with("CONTCAR") {
+                    return Ok("poscar");
+                }
+            }
+
+            Err(QutilityError::UnsupportedFormat(format!(
+                "Cannot determine cabal format for: {}",
+                input_path.display()
+            )))
+        }
+    }
+}
+
 /// 使用外部 cabal 命令转换（fallback 模式）
 fn convert_with_cabal(
     input_path: &Path,
@@ -214,15 +248,15 @@ fn convert_with_cabal(
         .and_then(|s| s.to_str())
         .unwrap_or("structure");
 
+    let cabal_source = infer_cabal_format(input_path)?;
+
     let (output_path, cabal_target) = match target {
+        OutputFormat::Res => (output_dir.join(format!("{}.res", stem)), "res"),
         OutputFormat::Cell => (output_dir.join(format!("{}.cell", stem)), "cell"),
         OutputFormat::Cif => (output_dir.join(format!("{}.cif", stem)), "cif"),
         OutputFormat::Xyz => (output_dir.join(format!("{}.xyz", stem)), "xyz"),
         OutputFormat::Xtl => (output_dir.join(format!("{}.xtl", stem)), "xtl"),
-        OutputFormat::Poscar => {
-            // POSCAR 需要通过 cif 中转
-            return convert_to_poscar_via_cabal(input_path, output_dir, stem, niggli, overwrite);
-        }
+        OutputFormat::Poscar => (output_dir.join(format!("POSCAR_{}", stem)), "poscar"),
     };
 
     if output_path.exists() && !overwrite {
@@ -237,8 +271,12 @@ fn convert_with_cabal(
         })?;
 
     let output_content = if niggli {
-        // res -> cell -> cell (niggli) -> target
-        let cell1 = run_cabal("res", "cell", &input_content)?;
+        // source -> cell -> cell (niggli) -> target
+        let cell1 = if cabal_source == "cell" {
+            input_content.clone()
+        } else {
+            run_cabal(cabal_source, "cell", &input_content)?
+        };
         let cell2 = run_cabal("cell", "cell", &cell1)?; // Niggli reduction
         if cabal_target == "cell" {
             cell2
@@ -246,7 +284,11 @@ fn convert_with_cabal(
             run_cabal("cell", cabal_target, &cell2)?
         }
     } else {
-        run_cabal("res", cabal_target, &input_content)?
+        if cabal_source == cabal_target {
+            input_content
+        } else {
+            run_cabal(cabal_source, cabal_target, &input_content)?
+        }
     };
 
     fs::write(&output_path, output_content).map_err(|e| QutilityError::FileWriteError {
@@ -255,69 +297,6 @@ fn convert_with_cabal(
     })?;
 
     Ok(ConvertStatus::Success)
-}
-
-/// 通过 cabal 转换为 POSCAR（需要 cif2cell）
-fn convert_to_poscar_via_cabal(
-    input_path: &Path,
-    output_dir: &Path,
-    stem: &str,
-    niggli: bool,
-    overwrite: bool,
-) -> Result<ConvertStatus> {
-    let output_path = output_dir.join(format!("POSCAR_{}", stem));
-
-    if output_path.exists() && !overwrite {
-        return Ok(ConvertStatus::Skipped);
-    }
-
-    // 读取输入
-    let input_content =
-        fs::read_to_string(input_path).map_err(|e| QutilityError::FileReadError {
-            path: input_path.display().to_string(),
-            source: e,
-        })?;
-
-    // res -> cif
-    let cif_content = if niggli {
-        let cell1 = run_cabal("res", "cell", &input_content)?;
-        let cell2 = run_cabal("cell", "cell", &cell1)?;
-        run_cabal("cell", "cif", &cell2)?
-    } else {
-        run_cabal("res", "cif", &input_content)?
-    };
-
-    // 写入临时 cif 文件
-    let temp_cif = std::env::temp_dir().join(format!("{}.cif", stem));
-    fs::write(&temp_cif, &cif_content).map_err(|e| QutilityError::FileWriteError {
-        path: temp_cif.display().to_string(),
-        source: e,
-    })?;
-
-    // 调用 cif2cell
-    let result = Command::new("cif2cell")
-        .args([
-            temp_cif.to_str().unwrap(),
-            "-p",
-            "vasp",
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
-        .output();
-
-    // 清理临时文件
-    let _ = fs::remove_file(&temp_cif);
-
-    match result {
-        Ok(output) if output.status.success() => Ok(ConvertStatus::Success),
-        Ok(output) => Err(QutilityError::CommandFailed {
-            command: "cif2cell".to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        }),
-        Err(_) => Err(QutilityError::CommandNotFound {
-            command: "cif2cell".to_string(),
-        }),
-    }
 }
 
 /// 调用 cabal 命令

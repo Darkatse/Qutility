@@ -28,10 +28,12 @@ pub fn parse_structure_file(path: &Path) -> Result<Crystal> {
     match ext.as_str() {
         "res" => res::parse_res_file(path),
         "cell" => cell::parse_cell_file(path),
+        "vasp" | "poscar" | "contcar" => poscar::parse_poscar_file(path),
         _ => {
             // 可能是 POSCAR/CONTCAR (无扩展名)
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("POSCAR") || name.starts_with("CONTCAR") {
+                let upper = name.to_uppercase();
+                if upper.starts_with("POSCAR") || upper.starts_with("CONTCAR") {
                     return poscar::parse_poscar_file(path);
                 }
             }

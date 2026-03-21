@@ -62,10 +62,13 @@ pub fn parse_poscar_content(content: &str, default_name: &str) -> Result<Crystal
     };
 
     // Line 1: Scaling factor
-    let scale: f64 = lines[1].trim().parse().unwrap_or(1.0);
+    //
+    // VASP 约定：若缩放因子为负，其绝对值代表目标晶胞体积 (Å^3)，需要按体积对晶格矢量做整体缩放。
+    // 对 Cartesian 坐标，VASP 也会应用相同的缩放因子。
+    let scale_raw: f64 = lines[1].trim().parse().unwrap_or(1.0);
 
-    // Lines 2-4: Lattice vectors
-    let mut matrix = [[0.0; 3]; 3];
+    // Lines 2-4: Lattice vectors (unscaled)
+    let mut matrix_raw = [[0.0; 3]; 3];
     for i in 0..3 {
         let parts: Vec<f64> = lines[2 + i]
             .split_whitespace()
@@ -78,25 +81,83 @@ pub fn parse_poscar_content(content: &str, default_name: &str) -> Result<Crystal
                 reason: format!("Invalid lattice vector at line {}", 3 + i),
             });
         }
-        matrix[i] = [parts[0] * scale, parts[1] * scale, parts[2] * scale];
+        matrix_raw[i] = [parts[0], parts[1], parts[2]];
+    }
+
+    let scale_factor = if scale_raw > 0.0 {
+        scale_raw
+    } else if scale_raw < 0.0 {
+        let desired_volume = scale_raw.abs();
+        let vol0 = Lattice::from_vectors(matrix_raw).volume().abs();
+        if vol0 < 1e-12 {
+            return Err(QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: "Invalid lattice vectors (zero volume)".to_string(),
+            });
+        }
+        (desired_volume / vol0).cbrt()
+    } else {
+        1.0
+    };
+
+    let mut matrix = matrix_raw;
+    for row in &mut matrix {
+        row[0] *= scale_factor;
+        row[1] *= scale_factor;
+        row[2] *= scale_factor;
     }
     let lattice = Lattice::from_vectors(matrix);
 
     // Line 5: Element symbols (VASP 5+) or atom counts (VASP 4)
     let line5_parts: Vec<&str> = lines[5].split_whitespace().collect();
+    if line5_parts.is_empty() {
+        return Err(QutilityError::ParseError {
+            format: "poscar".to_string(),
+            path: name.clone(),
+            reason: "Missing element/count line".to_string(),
+        });
+    }
     let (elements, counts, atom_line_start) = if line5_parts[0].parse::<i32>().is_ok() {
         // VASP 4 format: no element line, only counts
         // We'll use generic element names
-        let counts: Vec<usize> = line5_parts.iter().filter_map(|s| s.parse().ok()).collect();
+        let mut counts: Vec<usize> = Vec::new();
+        for token in &line5_parts {
+            let value: usize = token.parse().map_err(|_| QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: "Invalid atom counts line".to_string(),
+            })?;
+            counts.push(value);
+        }
+        if counts.is_empty() {
+            return Err(QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: "Invalid atom counts line".to_string(),
+            });
+        }
         let elements: Vec<String> = (0..counts.len()).map(|i| format!("X{}", i + 1)).collect();
         (elements, counts, 6)
     } else {
         // VASP 5+ format: element symbols on line 5, counts on line 6
         let elements: Vec<String> = line5_parts.iter().map(|s| s.to_string()).collect();
-        let counts: Vec<usize> = lines[6]
-            .split_whitespace()
-            .filter_map(|s| s.parse().ok())
-            .collect();
+        let mut counts: Vec<usize> = Vec::new();
+        for token in lines[6].split_whitespace() {
+            let value: usize = token.parse().map_err(|_| QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: "Invalid atom counts line".to_string(),
+            })?;
+            counts.push(value);
+        }
+        if counts.len() != elements.len() {
+            return Err(QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: "Mismatch between element symbols and atom counts".to_string(),
+            });
+        }
         (elements, counts, 7)
     };
 
@@ -126,29 +187,66 @@ pub fn parse_poscar_content(content: &str, default_name: &str) -> Result<Crystal
     // Parse atom positions
     let mut atoms: Vec<Atom> = Vec::new();
     let mut line_idx = coord_line + 1;
+    let expected_atoms: usize = counts.iter().sum();
 
     for (elem, &count) in elements.iter().zip(counts.iter()) {
         for _ in 0..count {
             if line_idx >= lines.len() {
-                break;
+                return Err(QutilityError::ParseError {
+                    format: "poscar".to_string(),
+                    path: name.clone(),
+                    reason: format!(
+                        "Unexpected end of file while reading atom positions (expected {expected_atoms}, got {})",
+                        atoms.len()
+                    ),
+                });
             }
-            let parts: Vec<f64> = lines[line_idx]
-                .split_whitespace()
-                .take(3)
-                .filter_map(|s| s.parse().ok())
-                .collect();
 
-            if parts.len() >= 3 {
-                let position = if is_cartesian {
-                    // Convert Cartesian to fractional
-                    cart_to_frac([parts[0], parts[1], parts[2]], &lattice)
-                } else {
-                    [parts[0], parts[1], parts[2]]
-                };
-                atoms.push(Atom::new(elem.clone(), position));
+            let coord_parts: Vec<&str> = lines[line_idx].split_whitespace().take(3).collect();
+            if coord_parts.len() < 3 {
+                return Err(QutilityError::ParseError {
+                    format: "poscar".to_string(),
+                    path: name.clone(),
+                    reason: format!("Invalid atom position at line {}", line_idx + 1),
+                });
             }
+
+            let x: f64 = coord_parts[0].parse().map_err(|_| QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: format!("Invalid atom position at line {}", line_idx + 1),
+            })?;
+            let y: f64 = coord_parts[1].parse().map_err(|_| QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: format!("Invalid atom position at line {}", line_idx + 1),
+            })?;
+            let z: f64 = coord_parts[2].parse().map_err(|_| QutilityError::ParseError {
+                format: "poscar".to_string(),
+                path: name.clone(),
+                reason: format!("Invalid atom position at line {}", line_idx + 1),
+            })?;
+
+            let position = if is_cartesian {
+                // Convert Cartesian to fractional (Cartesian coordinates are also scaled in POSCAR)
+                cart_to_frac([x * scale_factor, y * scale_factor, z * scale_factor], &lattice)
+            } else {
+                [x, y, z]
+            };
+            atoms.push(Atom::new(elem.clone(), position));
             line_idx += 1;
         }
+    }
+
+    if atoms.len() != expected_atoms {
+        return Err(QutilityError::ParseError {
+            format: "poscar".to_string(),
+            path: name.clone(),
+            reason: format!(
+                "Atom count mismatch (expected {expected_atoms}, got {})",
+                atoms.len()
+            ),
+        });
     }
 
     let mut crystal = Crystal::new(name, lattice, atoms);
@@ -187,9 +285,9 @@ fn cart_to_frac(cart: [f64; 3], lattice: &Lattice) -> [f64; 3] {
     ];
 
     [
-        inv[0][0] * cart[0] + inv[0][1] * cart[1] + inv[0][2] * cart[2],
-        inv[1][0] * cart[0] + inv[1][1] * cart[1] + inv[1][2] * cart[2],
-        inv[2][0] * cart[0] + inv[2][1] * cart[1] + inv[2][2] * cart[2],
+        inv[0][0] * cart[0] + inv[1][0] * cart[1] + inv[2][0] * cart[2],
+        inv[0][1] * cart[0] + inv[1][1] * cart[1] + inv[2][1] * cart[2],
+        inv[0][2] * cart[0] + inv[1][2] * cart[1] + inv[2][2] * cart[2],
     ]
 }
 
@@ -318,6 +416,47 @@ Direct
 
         // 2.0 * 2.0 = 4.0
         assert!((a - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_cart_to_frac_non_orthogonal_round_trip() {
+        let lattice = Lattice::from_parameters(3.0, 3.0, 5.0, 90.0, 90.0, 120.0);
+        let frac = [0.25, 0.5, 0.1];
+        let cart = frac_to_cart(frac, &lattice);
+        let back = cart_to_frac(cart, &lattice);
+
+        for i in 0..3 {
+            assert!((back[i] - frac[i]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_parse_poscar_cartesian_non_orthogonal() {
+        let lattice = Lattice::from_parameters(3.0, 3.0, 5.0, 90.0, 90.0, 120.0);
+        let frac = [0.25, 0.5, 0.1];
+        let cart = frac_to_cart(frac, &lattice);
+
+        let content = format!(
+            "\
+Hex
+1.0
+3.0 0.0 0.0
+-1.5 2.598076211 0.0
+0.0 0.0 5.0
+Si
+1
+Cartesian
+{:.10} {:.10} {:.10}
+",
+            cart[0], cart[1], cart[2]
+        );
+
+        let crystal = parse_poscar_content(&content, "Hex").unwrap();
+        assert_eq!(crystal.atoms.len(), 1);
+
+        for i in 0..3 {
+            assert!((crystal.atoms[0].position[i] - frac[i]).abs() < 1e-8);
+        }
     }
 
     #[test]

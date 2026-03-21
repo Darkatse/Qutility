@@ -1,11 +1,11 @@
 //! # AIRSS .res 格式解析器
 //!
-//! 解析 AIRSS 结构搜索产生的 .res 文件格式。
+//! 解析/写出 AIRSS (SHELX/SHLX) `.res` 结构文件格式。
 //!
 //! ## .res 格式说明
 //! ```text
-//! TITL name P V E H 0 0 n (sym) [spin info]
-//! CELL 1.0 a b c alpha beta gamma
+//! TITL name P V H spin modspin n (sym) n - copies
+//! CELL 1.54180 a b c alpha beta gamma
 //! LATT -1
 //! SFAC Element1 Element2 ...
 //! Element1 1 x1 y1 z1 1.0
@@ -66,29 +66,43 @@ pub fn parse_res_content(content: &str, default_name: &str) -> Result<Crystal> {
 
         match parts[0].to_uppercase().as_str() {
             "TITL" => {
-                // TITL name P V E H 0 0 n (sym) [spin]
-                if parts.len() >= 2 {
-                    name = parts[1].to_string();
-                }
-                if parts.len() >= 3 {
-                    pressure = parts[2].parse().ok();
-                }
-                if parts.len() >= 4 {
-                    volume = parts[3].parse().ok();
-                }
-                // parts[4] 是能量 E，parts[5] 是焓 H
-                if parts.len() >= 6 {
-                    enthalpy = parts[5].parse().ok();
-                }
-                // 查找 (sym) 空间群
-                if let Some(sym_start) = line.find('(') {
-                    if let Some(sym_end) = line.find(')') {
-                        if sym_end > sym_start {
-                            space_group = Some(line[sym_start + 1..sym_end].to_string());
-                        }
+                // AIRSS/cabal/cryan 常用 header: TITL name P V H spin modspin n (sym) n - copies
+                // 兼容：若只有 4 tokens，则视为 TITL name V H (无压力)。
+                let sym_start = line.find('(');
+                if let (Some(start), Some(end)) = (sym_start, line.find(')')) {
+                    if end > start {
+                        space_group = Some(line[start + 1..end].to_string());
                     }
                 }
-                // 查找 spin: N M 格式（在行尾）
+
+                let header_end = sym_start
+                    .or_else(|| line.find(" n -"))
+                    .unwrap_or_else(|| line.len());
+                let header = line[..header_end].trim();
+                let tokens: Vec<&str> = header.split_whitespace().collect();
+
+                if tokens.len() >= 2 {
+                    name = tokens[1].to_string();
+                }
+
+                // 参照 cryan.f90 的宽松解析：主要关心 P/V/H 与可选 spin/modspin。
+                if tokens.len() == 4 {
+                    // TITL name V H
+                    volume = tokens.get(2).and_then(|v| v.parse().ok());
+                    enthalpy = tokens.get(3).and_then(|v| v.parse().ok());
+                } else if tokens.len() >= 5 {
+                    pressure = tokens.get(2).and_then(|v| v.parse().ok());
+                    volume = tokens.get(3).and_then(|v| v.parse().ok());
+                    enthalpy = tokens.get(4).and_then(|v| v.parse().ok());
+
+                    // TITL name P V H spin modspin ...
+                    if tokens.len() >= 7 {
+                        integrated_spin = tokens.get(5).and_then(|v| v.parse().ok());
+                        integrated_abs_spin = tokens.get(6).and_then(|v| v.parse().ok());
+                    }
+                }
+
+                // 兼容旧的 "spin: N M" 行尾标记
                 if let Some(spin_pos) = line.find("spin:") {
                     let spin_parts: Vec<&str> = line[spin_pos + 5..].split_whitespace().collect();
                     if spin_parts.len() >= 1 {
@@ -122,7 +136,12 @@ pub fn parse_res_content(content: &str, default_name: &str) -> Result<Crystal> {
                 // 可能是原子行: Element type x y z occ
                 // 原子行以元素名开头
                 if parts.len() >= 5 && !sfac_elements.is_empty() {
-                    let element = parts[0];
+                    let raw_label = parts[0];
+                    let element = raw_label
+                        .find(|c: char| c.is_ascii_digit())
+                        .map(|idx| &raw_label[..idx])
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(raw_label);
                     // 验证是否是已知元素
                     if sfac_elements
                         .iter()
@@ -175,30 +194,28 @@ pub fn to_res_string(crystal: &Crystal) -> String {
         }
     }
 
-    // TITL 行
+    // TITL 行（对齐 AIRSS/cabal 输出，便于 cryan 等工具读取）
     let pressure = crystal.pressure.unwrap_or(0.0);
     let volume = crystal
         .volume
         .unwrap_or_else(|| crystal.lattice.volume().abs());
-    let energy = crystal.energy.unwrap_or(0.0);
-    let enthalpy = crystal.enthalpy.unwrap_or(energy);
+    let enthalpy = crystal
+        .enthalpy
+        .or(crystal.energy)
+        .unwrap_or(0.0);
+    let spin = crystal.integrated_spin.unwrap_or(0.0);
+    let modspin = crystal.integrated_abs_spin.unwrap_or(0.0);
     let space_group = crystal.space_group.as_deref().unwrap_or("P1");
+    let num_copies = 1;
 
     let mut result = format!(
-        "TITL {} {:.6} {:.6} {:.10} {:.10} 0 0 {} ({})",
-        crystal.name, pressure, volume, energy, enthalpy, n_atoms, space_group
+        "TITL {} {:.6} {:.6} {:.10} {:.6} {:.6} {} ({}) n - {}\n",
+        crystal.name, pressure, volume, enthalpy, spin, modspin, n_atoms, space_group, num_copies
     );
 
-    // 添加 spin 信息（如果有）
-    if let (Some(spin), Some(abs_spin)) = (crystal.integrated_spin, crystal.integrated_abs_spin) {
-        result.push_str(&format!(" spin: {:.6} {:.6}", spin, abs_spin));
-    }
-
-    result.push('\n');
-
-    // CELL 行
+    // CELL 行（SHELX: 第 2 列通常为 X-ray wavelength；AIRSS/cabal 默认为 1.54180）
     result.push_str(&format!(
-        "CELL 1.0 {:.10} {:.10} {:.10} {:.6} {:.6} {:.6}\n",
+        "CELL 1.54180 {:.10} {:.10} {:.10} {:.6} {:.6} {:.6}\n",
         a, b, c, alpha, beta, gamma
     ));
 
@@ -209,6 +226,9 @@ pub fn to_res_string(crystal: &Crystal) -> String {
     result.push_str(&format!("SFAC {}\n", elements.join(" ")));
 
     // 原子行
+    fn wrap01(x: f64) -> f64 {
+        x - x.floor()
+    }
     for atom in &crystal.atoms {
         let element_idx = elements
             .iter()
@@ -217,7 +237,11 @@ pub fn to_res_string(crystal: &Crystal) -> String {
             + 1;
         result.push_str(&format!(
             "{} {} {:.10} {:.10} {:.10} 1.0\n",
-            atom.element, element_idx, atom.position[0], atom.position[1], atom.position[2]
+            atom.element,
+            element_idx,
+            wrap01(atom.position[0]),
+            wrap01(atom.position[1]),
+            wrap01(atom.position[2])
         ));
     }
 
@@ -232,8 +256,8 @@ mod tests {
     #[test]
     fn test_parse_res_basic() {
         let content = r#"
-TITL TiC-12345 100.0 50.0 -100.0 -99.5 0 0 8 (Fm-3m)
-CELL 1.0 4.33 4.33 4.33 90.0 90.0 90.0
+TITL TiC-12345 100.0 50.0 -99.5 0 0 8 (Fm-3m) n - 1
+CELL 1.54180 4.33 4.33 4.33 90.0 90.0 90.0
 LATT -1
 SFAC Ti C
 Ti 1 0.0 0.0 0.0 1.0
@@ -256,8 +280,8 @@ END
     #[test]
     fn test_parse_res_with_spin() {
         let content = r#"
-TITL Fe2-123 0.0 25.0 -50.0 -50.0 0 0 2 (P-1) spin: 2.5 3.0
-CELL 1.0 2.87 2.87 2.87 90.0 90.0 90.0
+TITL Fe2-123 0.0 25.0 -50.0 2.5 3.0 2 (P-1) n - 1
+CELL 1.54180 2.87 2.87 2.87 90.0 90.0 90.0
 LATT -1
 SFAC Fe
 Fe 1 0.0 0.0 0.0 1.0
@@ -296,9 +320,26 @@ END
     }
 
     #[test]
+    fn test_parse_res_allows_numbered_labels() {
+        let content = r#"
+TITL NaCl-1 0.0 125.0 -10.0 0 0 2 (P1) n - 1
+CELL 1.54180 5.0 5.0 5.0 90.0 90.0 90.0
+LATT -1
+SFAC Na Cl
+Na1 1 0.0 0.0 0.0 1.0
+Cl2 2 0.5 0.5 0.5 1.0
+END
+"#;
+        let crystal = parse_res_content(content, "test").unwrap();
+        assert_eq!(crystal.atoms.len(), 2);
+        assert_eq!(crystal.atoms[0].element, "Na");
+        assert_eq!(crystal.atoms[1].element, "Cl");
+    }
+
+    #[test]
     fn test_parse_res_missing_cell() {
         let content = r#"
-TITL Test 0.0 10.0 0.0 0.0 0 0 1 (P1)
+TITL Test 0.0 10.0 0.0 0 0 1 (P1) n - 1
 SFAC Fe
 Fe 1 0.0 0.0 0.0 1.0
 END

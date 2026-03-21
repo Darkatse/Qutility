@@ -62,9 +62,13 @@ impl Lattice {
         let dot_ac: f64 = a_vec.iter().zip(c_vec.iter()).map(|(x, y)| x * y).sum();
         let dot_ab: f64 = a_vec.iter().zip(b_vec.iter()).map(|(x, y)| x * y).sum();
 
-        let alpha = (dot_bc / (b * c)).acos().to_degrees();
-        let beta = (dot_ac / (a * c)).acos().to_degrees();
-        let gamma = (dot_ab / (a * b)).acos().to_degrees();
+        fn acos_deg_clamped(x: f64) -> f64 {
+            x.clamp(-1.0, 1.0).acos().to_degrees()
+        }
+
+        let alpha = acos_deg_clamped(dot_bc / (b * c));
+        let beta = acos_deg_clamped(dot_ac / (a * c));
+        let gamma = acos_deg_clamped(dot_ab / (a * b));
 
         (a, b, c, alpha, beta, gamma)
     }
